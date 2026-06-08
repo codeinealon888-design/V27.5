@@ -417,3 +417,49 @@ end
 -- _G.OmegaAPI.AddActionBtn(MyNewTab, "ปุ่มกด", "คำอธิบาย", "กดที่นี่", function()
 --     print("กดปุ่มแล้ว!")
 -- end)
+-- [[ 🛠️ [RE-REGISTER] นำฟังก์ชันเดิมกลับเข้าสู่ระบบ ]] --
+
+-- 1. สร้างหน้า Tab
+local TabMain = _G.OmegaAPI.CreatePage("🎯 ระบบหลัก")
+local TabMove = _G.OmegaAPI.CreatePage("🕊️ เคลื่อนไหว")
+local TabESP = _G.OmegaAPI.CreatePage("👁️ เนตรทิพย์")
+
+-- 2. ใส่ฟังก์ชันใน Tab ระบบหลัก
+_G.OmegaAPI.AddToggle(TabMain, "ติดตามเป้าหมาย", "ล็อกมุมกล้องตามเป้า", false, function(state)
+    Omega.TrackingMode = state
+    FloatingFrame.Visible = state
+    ApplyTrackingLogic()
+end)
+
+_G.OmegaAPI.AddToggle(TabMain, "โหมดเหนียว (Sticky)", "ดูดตัวเป้าหมายติดตัว", false, function(state)
+    Omega.StickyActive = state
+end)
+
+_G.OmegaAPI.AddActionBtn(TabMain, "เปลี่ยนเป้าหมาย", "เลือกคนต่อไป", "Next", function()
+    Omega.TargetIndex = Omega.TargetIndex + 1
+    ApplyTrackingLogic()
+end)
+
+-- 3. ใส่ฟังก์ชันใน Tab เคลื่อนไหว
+_G.OmegaAPI.AddToggle(TabMove, "บินทะลุมิติ", "โหมดบินอิสระ", false, function(state)
+    Modules:ToggleFly(state)
+end)
+
+_G.OmegaAPI.AddToggle(TabMove, "กระโดดไม่จำกัด", "กระโดดกลางอากาศ", false, function(state)
+    Modules:ToggleInfJump(state)
+end)
+
+-- 4. ใส่ฟังก์ชันใน Tab เนตรทิพย์
+_G.OmegaAPI.AddToggle(TabESP, "แสดงกรอบ (Chams)", "มองเห็นทะลุผนัง", false, function(state)
+    Omega.ESPChamsActive = state
+    Modules:RefreshAllESP()
+end)
+
+_G.OmegaAPI.AddToggle(TabESP, "แสดงชื่อ/ระยะ", "เปิดป้ายเหนือหัว", false, function(state)
+    Omega.ESPTagsActive = state
+    Modules:RefreshAllESP()
+end)
+
+_G.OmegaAPI.AddActionBtn(TabESP, "ล้าง ESP", "รีเซ็ตค่า ESP ทั้งหมด", "Refresh", function()
+    Modules:RefreshAllESP()
+end)
