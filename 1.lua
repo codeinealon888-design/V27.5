@@ -711,3 +711,76 @@ end)
 
 Pages["แผงควบคุมหลัก"].Visible = true
 print("OMEGA PROJECT V27.5 - TRUE BLACK & WAYPOINT LIST MANAGER LOADED SUCCESS.")
+
+-- ====================================================================
+-- 🛡️ [ระบบป้องกันตัวอัตโนมัติ & พรางตัว - OMEGA MODULAR ADDON]
+-- 📌 วิธีใช้: นำโค้ดชุดนี้ไปวาง "ต่อท้ายสุด" ของสคริปต์เดิมได้ทันที 
+-- ====================================================================
+
+local GuiService = game:GetService("GuiService")
+
+-- [1. ระบบต้านแรงเหวี่ยง/ตัวปลิว (Anti-Fling & Anti-Velocity)]
+task.spawn(function()
+    while task.wait(0.1) do
+        pcall(function()
+            local char = LocalPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            -- ทำงานเฉพาะตอนที่ไม่ได้เปิดโหมดบิน (เพื่อไม่ให้ขัดกับ Fly ความเร็วสูง)
+            if root and not Omega.Flying then 
+                if root.Velocity.Magnitude > 200 or root.RotVelocity.Magnitude > 200 then
+                    root.Velocity = Vector3.new(0, 0, 0)
+                    root.RotVelocity = Vector3.new(0, 0, 0)
+                end
+            end
+        end)
+    end
+end)
+
+-- [2. ระบบต้านสถานะล้ม/สลบ (Anti-Ragdoll & Anti-Stun)]
+task.spawn(function()
+    while task.wait(0.1) do
+        pcall(function()
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                -- ดักจับถ้าตัวละครเปลี่ยนสถานะเป็นล้มดิ้น ให้ดึงตัวกลับมายืนทันที
+                if hum:GetState() == Enum.HumanoidStateType.Ragdoll or hum:GetState() == Enum.HumanoidStateType.FallingDown then
+                    hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                end
+            end
+        end)
+    end
+end)
+
+-- [3. ระบบเชื่อมต่อใหม่อันตรธานเมื่อหลุดเซิร์ฟ (Auto-Rejoin)]
+pcall(function()
+    GuiService.ErrorMessageChanged:Connect(function()
+        task.wait(2.5) -- หน่วงเวลาป้องกันระบบเตะซ้ำซ้อน
+        if #Players:GetPlayers() <= 1 then
+            -- ถ้าเซิร์ฟเดิมปิดไปแล้ว ให้สุ่มไปเซิร์ฟใหม่
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        else
+            -- พยายามกลับเข้าเซิร์ฟเวอร์เดิมเพื่อรักษาความต่อเนื่อง
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end
+    end)
+end)
+
+-- [4. ระบบสุ่มชื่อ GUI หลบการตรวจจับ (CoreGui Name Obfuscator)]
+task.spawn(function()
+    local fakeNames = {
+        "RobloxGui_Updated", "BubbleChat_Core", "ChatLocalization", 
+        "TopBarApp", "PurchasePromptApp", "InGameMenu", "ControlHintApp"
+    }
+    while task.wait(7) do
+        pcall(function()
+            if ScreenGui then
+                -- สลับชื่อ UI ไปเรื่อยๆ ทุก 7 วินาที เพื่อไม่ให้แอนตี้ชีทของเกมกวาดเจอชื่อ Omega
+                local randomName = fakeNames[math.random(1, #fakeNames)] .. "_" .. tostring(math.random(1000, 9999))
+                ScreenGui.Name = randomName
+            end
+        end)
+    end
+end)
+
+print("🛡️ OMEGA AUTO-MECHANICS SECURED & DEPLOYED SUCCESSFULLY.")
