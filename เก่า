@@ -1,0 +1,823 @@
+-- [[ V23 THE OMEGA HUB - ULTIMATE INTEGRATED SYSTEM ]] --
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- เคลียร์ของเก่าป้องกัน UI ซ้อน
+if CoreGui:FindFirstChild("V23_OmegaHub") then CoreGui.V23_OmegaHub:Destroy() end
+if LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("V23_OmegaHub") then LocalPlayer.PlayerGui.V23_OmegaHub:Destroy() end
+
+local MenuState = { Visible = true, Minimized = false, CurrentTab = "Combat" }
+local TpWindowState = { Minimized = false }
+local SpecWindowState = { Minimized = false }
+local FreecamWindowState = { Minimized = false }
+
+-- // --- SETTINGS ENGINE --- // --
+local AimbotSettings = {
+    Enabled = false,
+    WallCheck = true,
+    Distance = 1000,
+    AimPart = "Head",
+    Smoothness = 0.9
+}
+
+local EspSettings = {
+    Boxes = false,
+    Skeleton = false
+}
+
+local MovementSettings = {
+    SpeedEnabled = false,
+    SpeedValue = 16,
+    InfJump = false,
+    Invisibility = false 
+}
+
+local TeleportSettings = {
+    SavedPoints = {},
+    GlideSpeed = 0.05
+}
+
+local SpectatorSettings = {
+    Active = false,
+    Following = false,
+    CurrentIndex = 1,
+    Connection = nil
+}
+
+local FreecamSettings = {
+    Enabled = false,
+    Speed = 1,
+    _forward = false,
+    _back = false,
+    _left = false,
+    _right = false,
+    _up = false,
+    _down = false,
+}
+
+local freecamConnection = nil
+
+-- // --- CORE HELPER FUNCTIONS --- // --
+local function GetOtherPlayers()
+    local list = {}
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer then table.insert(list, v) end
+    end
+    return list
+end
+
+local function IsVisible(targetPart)
+    if not AimbotSettings.WallCheck then return true end
+    local rayParam = RaycastParams.new()
+    rayParam.FilterType = Enum.RaycastFilterType.Exclude
+    rayParam.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+    local origin = Camera.CFrame.Position
+    local direction = (targetPart.Position - origin).Unit * (targetPart.Position - origin).Magnitude
+    local result = workspace:Raycast(origin, direction, rayParam)
+    return result == nil or result.Instance:IsDescendantOf(targetPart.Parent)
+end
+
+local function GetClosestTarget()
+    local target, dist = nil, AimbotSettings.Distance
+    local mouseLoc = UserInputService:GetMouseLocation()
+
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer and v.Character then
+            local hum = v.Character:FindFirstChildOfClass("Humanoid")
+            local part = v.Character:FindFirstChild(AimbotSettings.AimPart)
+            
+            if hum and hum.Health > 0 and part then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    local mDist = (Vector2.new(screenPos.X, screenPos.Y) - mouseLoc).Magnitude
+                    if mDist < dist then
+                        if IsVisible(part) then target = part; dist = mDist end
+                    end
+                end
+            end
+        end
+    end
+    return target
+end
+
+-- // --- [TELEPORT CORE LOGIC] --- // --
+local function TeleportToPosition(pos, instant)
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    local hrp = char.HumanoidRootPart
+
+    if instant then
+        hrp.CFrame = CFrame.new(pos)
+    else
+        local connection
+        connection = RunService.RenderStepped:Connect(function()
+            if not char or not char:FindFirstChild("HumanoidRootPart") then
+                connection:Disconnect()
+                return
+            end
+            local currentPos = hrp.Position
+            local distance = (currentPos - pos).Magnitude
+            if distance < 1 then
+                hrp.CFrame = CFrame.new(pos)
+                connection:Disconnect()
+            else
+                hrp.CFrame = hrp.CFrame:Lerp(CFrame.new(pos), TeleportSettings.GlideSpeed)
+            end
+        end)
+    end
+end
+
+-- // --- [SPECTATOR CORE LOGIC] --- // --
+local function StopFollow()
+    if SpectatorSettings.Connection then
+        SpectatorSettings.Connection:Disconnect()
+        SpectatorSettings.Connection = nil
+    end
+    SpectatorSettings.Following = false
+    Camera.CameraType = Enum.CameraType.Custom
+end
+
+local function UpdateSpecLabel(label)
+    local list = GetOtherPlayers()
+    if #list == 0 then
+        label.Text = "❌ ไม่มีผู้เล่นอื่น"
+        return
+    end
+    local target = list[SpectatorSettings.CurrentIndex]
+    if target then
+        label.Text = "👤 " .. target.Name .. " (" .. SpectatorSettings.CurrentIndex .. "/" .. #list .. ")"
+    end
+end
+
+local function FollowPlayer(player, statusLabel)
+    StopFollow()
+    if not player then return end
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then
+        statusLabel.Text = "⚠️ ไม่พบตัวละคร แต่กำลังรอส่อง..."
+    end
+
+    if FreecamSettings.Enabled then statusLabel.Text = "⚠️ กรุณาปิด Freecam ก่อน!" return end
+
+    SpectatorSettings.Following = true
+    Camera.CameraType = Enum.CameraType.Scriptable
+
+    SpectatorSettings.Connection = RunService.RenderStepped:Connect(function()
+        local c = player.Character
+        if c and c:FindFirstChild("HumanoidRootPart") then
+            Camera.CFrame = CFrame.new(c.HumanoidRootPart.Position + Vector3.new(0, 5, 10), c.HumanoidRootPart.Position)
+            statusLabel.Text = "👁️ กำลังล็อคกล้อง: " .. player.Name
+        else
+            statusLabel.Text = "⚠️ รอตัวละครเกิดใหม่..."
+        end
+    end)
+end
+
+local function TeleportToPlayer(player, statusLabel)
+    if not player then return end
+    local myChar = LocalPlayer.Character
+    local targetChar = player.Character
+    if myChar and myChar:FindFirstChild("HumanoidRootPart") and targetChar and targetChar:FindFirstChild("HumanoidRootPart") then
+        myChar.HumanoidRootPart.CFrame = targetChar.HumanoidRootPart.CFrame + Vector3.new(2, 0, 0)
+        statusLabel.Text = "✅ วาปไปหา: " .. player.Name
+    else
+        statusLabel.Text = "⚠️ ไม่สามารถวาปได้"
+    end
+end
+
+-- // --- [FREECAM CORE LOGIC] --- // --
+local function EnableFreecam()
+    if SpectatorSettings.Following then StopFollow() end
+    Camera.CameraType = Enum.CameraType.Scriptable
+    local camCF = Camera.CFrame
+
+    freecamConnection = RunService.RenderStepped:Connect(function()
+        local move = Vector3.zero
+
+        -- คีย์บอร์ด (PC)
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += camCF.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= camCF.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= camCF.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += camCF.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0,1,0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move -= Vector3.new(0,1,0) end
+
+        -- ปุ่มจำลอง (Mobile)
+        if FreecamSettings._forward then move += camCF.LookVector end
+        if FreecamSettings._back    then move -= camCF.LookVector end
+        if FreecamSettings._left    then move -= camCF.RightVector end
+        if FreecamSettings._right   then move += camCF.RightVector end
+        if FreecamSettings._up      then move += Vector3.new(0,1,0) end
+        if FreecamSettings._down    then move -= Vector3.new(0,1,0) end
+
+        if move.Magnitude > 0 then
+            camCF = camCF + move.Unit * FreecamSettings.Speed
+        end
+
+        local delta = UserInputService:GetMouseDelta()
+        camCF = camCF * CFrame.Angles(0, math.rad(-delta.X * 0.3), 0)
+        camCF = camCF * CFrame.Angles(math.rad(-delta.Y * 0.3), 0, 0)
+
+        Camera.CFrame = camCF
+    end)
+end
+
+local function DisableFreecam()
+    if freecamConnection then
+        freecamConnection:Disconnect()
+        freecamConnection = nil
+    end
+    Camera.CameraType = Enum.CameraType.Custom
+    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    for _, k in pairs({"_up","_down","_forward","_back","_left","_right"}) do
+        FreecamSettings[k] = false
+    end
+    FreecamSettings.Enabled = false
+end
+
+-- // --- [ESP BOX & SKELETON SECTION] --- // --
+local function CreateEspBox(player)
+    pcall(function()
+        local Box = Drawing.new("Square")
+        Box.Visible = false; Box.Thickness = 2; Box.Transparency = 1; Box.Filled = false
+        local function Update()
+            local c
+            c = RunService.RenderStepped:Connect(function()
+                if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 and EspSettings.Boxes then
+                    local RootPart = player.Character.HumanoidRootPart
+                    local RootPos, OnScreen = Camera:WorldToViewportPoint(RootPart.Position)
+                    if OnScreen then
+                        local Scale = 1 / (RootPos.Z * math.tan(math.rad(Camera.FieldOfView * 0.5)) * 2) * 1000
+                        local Width, Height = 4 * Scale, 6 * Scale
+                        Box.Size = Vector2.new(Width, Height)
+                        Box.Position = Vector2.new(RootPos.X - Width / 2, RootPos.Y - Height / 2)
+                        Box.Color = Color3.fromHSV(tick() % 5 / 5, 1, 1)
+                        Box.Visible = true
+                    else Box.Visible = false end
+                else
+                    Box.Visible = false
+                    if not player.Parent then Box:Remove() c:Disconnect() end
+                end
+            end)
+        end
+        coroutine.wrap(Update)()
+    end)
+end
+
+local function CreateLine()
+    local l; pcall(function() l = Drawing.new("Line") l.Visible = false l.Color = Color3.new(1, 1, 1) l.Thickness = 1 l.Transparency = 1 end)
+    return l
+end
+
+local function CreateHeadCircle()
+    local c; pcall(function() c = Drawing.new("Circle") c.Visible = false c.Color = Color3.new(1, 1, 1) c.Thickness = 1 c.Transparency = 1 c.Filled = false c.Radius = 0 end)
+    return c
+end
+
+local function CreateSkeleton(player)
+    pcall(function()
+        local Objects = {
+            HeadCircle = CreateHeadCircle(), Spine = CreateLine(), UpperTorsoToLeftArm = CreateLine(), UpperTorsoToRightArm = CreateLine(),
+            LeftArmToWrist = CreateLine(), RightArmToWrist = CreateLine(), LowerTorsoToLeftLeg = CreateLine(), LowerTorsoToRightLeg = CreateLine(),
+            LeftLegToAnkle = CreateLine(), RightLegToAnkle = CreateLine()
+        }
+
+        RunService.RenderStepped:Connect(function()
+            if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 and EspSettings.Skeleton then
+                local char = player.Character
+                local isR15 = (char.Humanoid.RigType == Enum.HumanoidRigType.R15)
+                local rgbColor = Color3.fromHSV(tick() % 5 / 5, 1, 1)
+                for _, obj in pairs(Objects) do if obj then obj.Color = rgbColor end end
+
+                local parts = {}
+                if isR15 then
+                    parts = {
+                        Head = char:FindFirstChild("Head"), UpperTorso = char:FindFirstChild("UpperTorso"), LowerTorso = char:FindFirstChild("LowerTorso"),
+                        LeftUpperArm = char:FindFirstChild("LeftUpperArm"), LeftLowerArm = char:FindFirstChild("LeftLowerArm"),
+                        RightUpperArm = char:FindFirstChild("RightUpperArm"), RightLowerArm = char:FindFirstChild("RightLowerArm"),
+                        LeftUpperLeg = char:FindFirstChild("LeftUpperLeg"), LeftLowerLeg = char:FindFirstChild("LeftLowerLeg"),
+                        RightUpperLeg = char:FindFirstChild("RightUpperLeg"), RightLowerLeg = char:FindFirstChild("RightLowerLeg")
+                    }
+                else
+                    parts = {
+                        Head = char:FindFirstChild("Head"), UpperTorso = char:FindFirstChild("Torso"), LowerTorso = char:FindFirstChild("Torso"),
+                        LeftUpperArm = char:FindFirstChild("Left Arm"), LeftLowerArm = char:FindFirstChild("Left Arm"),
+                        RightUpperArm = char:FindFirstChild("Right Arm"), RightLowerArm = char:FindFirstChild("Right Arm"),
+                        LeftUpperLeg = char:FindFirstChild("Left Leg"), LeftLowerLeg = char:FindFirstChild("Left Leg"),
+                        RightUpperLeg = char:FindFirstChild("Right Leg"), RightLowerLeg = char:FindFirstChild("Right Leg")
+                    }
+                end
+
+                local function SetLine(line, p1, p2)
+                    if line and p1 and p2 then
+                        local pos1, on1 = Camera:WorldToViewportPoint(p1.Position)
+                        local pos2, on2 = Camera:WorldToViewportPoint(p2.Position)
+                        if on1 and on2 then
+                            line.From = Vector2.new(pos1.X, pos1.Y); line.To = Vector2.new(pos2.X, pos2.Y); line.Visible = true; return
+                        end
+                    end
+                    if line then line.Visible = false end
+                end
+
+                local function SetHead(circle, headPart)
+                    if circle and headPart then
+                        local pos, on = Camera:WorldToViewportPoint(headPart.Position)
+                        if on then
+                            circle.Position = Vector2.new(pos.X, pos.Y)
+                            local dist = (Camera.CFrame.Position - headPart.Position).Magnitude
+                            circle.Radius = math.clamp(80 / dist, 2, 15); circle.Visible = true; return
+                        end
+                    end
+                    if circle then circle.Visible = false end
+                end
+
+                SetHead(Objects.HeadCircle, parts.Head)
+                SetLine(Objects.Spine, parts.Head, parts.LowerTorso)
+                SetLine(Objects.UpperTorsoToLeftArm, parts.UpperTorso, parts.LeftUpperArm)
+                SetLine(Objects.UpperTorsoToRightArm, parts.UpperTorso, parts.RightUpperArm)
+                if isR15 then
+                    SetLine(Objects.LeftArmToWrist, parts.LeftUpperArm, parts.LeftLowerArm)
+                    SetLine(Objects.RightArmToWrist, parts.RightUpperArm, parts.RightLowerArm)
+                    SetLine(Objects.LeftLegToAnkle, parts.LeftUpperLeg, parts.LeftLowerLeg)
+                    SetLine(Objects.RightLegToAnkle, parts.RightUpperLeg, parts.RightLowerLeg)
+                end
+                SetLine(Objects.LowerTorsoToLeftLeg, parts.LowerTorso, parts.LeftUpperLeg)
+                SetLine(Objects.LowerTorsoToRightLeg, parts.LowerTorso, parts.RightUpperLeg)
+            else
+                for _, obj in pairs(Objects) do if obj then obj.Visible = false end end
+                if not player.Parent then for _, obj in pairs(Objects) do if obj then obj:Remove() end end end
+            end
+        end)
+    end)
+end
+
+-- // --- UNIVERSAL INVISIBILITY & MOVEMENT --- // --
+local function HandleInvisibility()
+    RunService.RenderStepped:Connect(function()
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            if MovementSettings.Invisibility then
+                for _, part in pairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then part.Transparency = 1
+                    elseif part:IsA("Decal") then part.Transparency = 1 end
+                end
+                char.HumanoidRootPart.CanCollide = false
+            else
+                for _, part in pairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then part.Transparency = 0
+                    elseif part:IsA("Decal") then part.Transparency = 0 end
+                end
+            end
+        end
+    end)
+end
+
+local function HandleMovement()
+    RunService.Heartbeat:Connect(function()
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+            if MovementSettings.SpeedEnabled then LocalPlayer.Character.Humanoid.WalkSpeed = MovementSettings.SpeedValue
+            else if LocalPlayer.Character.Humanoid.WalkSpeed ~= 16 then LocalPlayer.Character.Humanoid.WalkSpeed = 16 end end
+        end
+    end)
+    UserInputService.JumpRequest:Connect(function()
+        if MovementSettings.InfJump and LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+            LocalPlayer.Character:FindFirstChildOfClass("Humanoid"):ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end)
+end
+coroutine.wrap(HandleMovement)()
+coroutine.wrap(HandleInvisibility)()
+
+-- // --- INITIALIZATION --- // --
+for _, v in pairs(Players:GetPlayers()) do if v ~= LocalPlayer then CreateEspBox(v) CreateSkeleton(v) end end
+Players.PlayerAdded:Connect(function(v) CreateEspBox(v) CreateSkeleton(v) end)
+
+-- // --- UI HELPERS --- // --
+local function MakeDraggable(ui)
+    local dragging, dragInput, dragStart, startPos
+    ui.InputBegan:Connect(function(input)
+        if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+            dragging = true; dragStart = input.Position; startPos = ui.Position
+            input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then dragging = false end end)
+        end
+    end)
+    ui.InputChanged:Connect(function(input) if (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then dragInput = input end end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            ui.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+-- // --- MAIN FRAME SETUP --- // --
+local ScreenGui = Instance.new("ScreenGui"); ScreenGui.Name = "V23_OmegaHub"; ScreenGui.ResetOnSpawn = false
+local UISuccess, _ = pcall(function() ScreenGui.Parent = CoreGui end)
+if not UISuccess then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 580, 0, 350); MainFrame.Position = UDim2.new(0.5, -290, 0.5, -175)
+MainFrame.BackgroundColor3 = Color3.fromRGB(2, 4, 10); MainFrame.ClipsDescendants = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 15)
+local MainStroke = Instance.new("UIStroke", MainFrame); MainStroke.Thickness = 2.5; MakeDraggable(MainFrame)
+
+local Header = Instance.new("Frame", MainFrame)
+Header.Size = UDim2.new(1, 0, 0, 38); Header.BackgroundColor3 = Color3.fromRGB(10, 15, 30)
+local Title = Instance.new("TextLabel", Header)
+Title.Size = UDim2.new(1, -100, 1, 0); Title.Position = UDim2.new(0, 15, 0, 0)
+Title.Text = "OMEGA HUB v23 | Premium Edition"; Title.TextColor3 = Color3.fromRGB(0, 180, 255); Title.Font = Enum.Font.GothamBold; Title.TextXAlignment = Enum.TextXAlignment.Left; Title.BackgroundTransparency = 1
+
+local function WinBtn(t, p, c, cb)
+    local b = Instance.new("TextButton", Header); b.Size = UDim2.new(0, 28, 0, 28); b.Position = p; b.BackgroundColor3 = c
+    b.Text = t; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; Instance.new("UICorner", b); b.MouseButton1Click:Connect(cb)
+end
+WinBtn("X", UDim2.new(1, -35, 0, 5), Color3.fromRGB(180, 50, 50), function() MainFrame.Visible = false end)
+WinBtn("-", UDim2.new(1, -70, 0, 5), Color3.fromRGB(50, 55, 70), function()
+    MenuState.Minimized = not MenuState.Minimized
+    MainFrame:TweenSize(MenuState.Minimized and UDim2.new(0, 580, 0, 38) or UDim2.new(0, 580, 0, 350), "Out", "Quad", 0.2, true)
+end)
+
+local Sidebar = Instance.new("Frame", MainFrame)
+Sidebar.Size = UDim2.new(0, 140, 1, -38); Sidebar.Position = UDim2.new(0, 0, 0, 38); Sidebar.BackgroundColor3 = Color3.fromRGB(5, 10, 20)
+local SidebarList = Instance.new("UIListLayout", Sidebar); SidebarList.Padding = UDim.new(0, 5); SidebarList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+Instance.new("UIPadding", Sidebar).PaddingTop = UDim.new(0, 10)
+
+local ContentArea = Instance.new("Frame", MainFrame)
+ContentArea.Size = UDim2.new(1, -150, 1, -50); ContentArea.Position = UDim2.new(0, 145, 0, 45); ContentArea.BackgroundTransparency = 1
+
+local Pages = {}
+local function CreatePage(name)
+    local p = Instance.new("ScrollingFrame", ContentArea)
+    p.Size = UDim2.new(1, 0, 1, 0); p.BackgroundTransparency = 1; p.Visible = false; p.ScrollBarThickness = 2
+    local grid = Instance.new("UIGridLayout", p); grid.CellSize = UDim2.new(0, 200, 0, 40); grid.FillDirection = Enum.FillDirection.Horizontal
+    p.AutomaticCanvasSize = Enum.AutomaticSize.Y; Pages[name] = p; return p
+end
+
+local function AddSpeedControl(pageName)
+    local container = Instance.new("Frame", Pages[pageName])
+    container.BackgroundColor3 = Color3.fromRGB(10, 25, 45); container.Size = UDim2.new(0, 200, 0, 40)
+    Instance.new("UICorner", container); local s = Instance.new("UIStroke", container); s.Color = Color3.fromRGB(0, 100, 200)
+
+    local mainBtn = Instance.new("TextButton", container)
+    mainBtn.Size = UDim2.new(0.6, 0, 1, 0); mainBtn.BackgroundTransparency = 1
+    mainBtn.Text = "  ⚡ Speed: " .. MovementSettings.SpeedValue; mainBtn.TextColor3 = Color3.new(1,1,1)
+    mainBtn.Font = Enum.Font.GothamBold; mainBtn.TextSize = 10; mainBtn.TextXAlignment = Enum.TextXAlignment.Left
+
+    local function UpdateDisplay()
+        mainBtn.Text = "  ⚡ Speed: " .. MovementSettings.SpeedValue .. (MovementSettings.SpeedEnabled and " [ON]" or " [OFF]")
+        mainBtn.TextColor3 = MovementSettings.SpeedEnabled and Color3.fromRGB(0, 255, 150) or Color3.new(1,1,1)
+    end
+    mainBtn.MouseButton1Click:Connect(function() MovementSettings.SpeedEnabled = not MovementSettings.SpeedEnabled; UpdateDisplay() end)
+
+    local function CreateAdj(t, x, amt)
+        local b = Instance.new("TextButton", container); b.Size = UDim2.new(0.2, -4, 0.8, 0); b.Position = UDim2.new(x, 2, 0.1, 0)
+        b.BackgroundColor3 = Color3.fromRGB(20, 45, 80); b.Text = t; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; Instance.new("UICorner", b)
+        b.MouseButton1Click:Connect(function() MovementSettings.SpeedValue = math.clamp(MovementSettings.SpeedValue + amt, 16, 500); UpdateDisplay() end)
+    end
+    CreateAdj("-", 0.6, -5); CreateAdj("+", 0.8, 5)
+end
+
+local function AddBtn(pageName, text, icon, cb)
+    local b = Instance.new("TextButton", Pages[pageName])
+    b.BackgroundColor3 = Color3.fromRGB(10, 25, 45); b.Text = "  " .. icon .. "  " .. text .. " [OFF]"
+    b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; b.TextSize = 11; b.TextXAlignment = Enum.TextXAlignment.Left
+    Instance.new("UICorner", b); local s = Instance.new("UIStroke", b); s.Color = Color3.fromRGB(0, 100, 200)
+    
+    local function ToggleVisual()
+        local is_on = b.Text:find("%[ON%]")
+        if is_on then b.Text = "  " .. icon .. "  " .. text .. " [OFF]" b.TextColor3 = Color3.new(1,1,1)
+        else b.Text = "  " .. icon .. "  " .. text .. " [ON]" b.TextColor3 = Color3.fromRGB(0, 255, 150) end
+    end
+    b.MouseButton1Click:Connect(function() cb(); ToggleVisual() end)
+end
+
+-- // --- [1. MINI TELEPORT WINDOW] --- // --
+local TpWindow = Instance.new("Frame", ScreenGui)
+TpWindow.Size = UDim2.new(0, 320, 0, 230); TpWindow.AnchorPoint = Vector2.new(0.5, 0.5); TpWindow.Position = UDim2.new(0.5, 0, 0.5, 0) 
+TpWindow.BackgroundColor3 = Color3.fromRGB(6, 12, 24); TpWindow.Visible = false; TpWindow.ClipsDescendants = true
+Instance.new("UICorner", TpWindow).CornerRadius = UDim.new(0, 10)
+local TpStroke = Instance.new("UIStroke", TpWindow); TpStroke.Thickness = 2; TpStroke.Color = Color3.fromRGB(0, 150, 255); MakeDraggable(TpWindow)
+
+local TpHeader = Instance.new("Frame", TpWindow); TpHeader.Size = UDim2.new(1, 0, 0, 28); TpHeader.BackgroundColor3 = Color3.fromRGB(12, 22, 40)
+local TpTitle = Instance.new("TextLabel", TpHeader); TpTitle.Size = UDim2.new(1, -65, 1, 0); TpTitle.Position = UDim2.new(0, 10, 0, 0)
+TpTitle.Text = "🌀 Teleport Mini-Panel"; TpTitle.TextColor3 = Color3.fromRGB(0, 200, 255); TpTitle.Font = Enum.Font.GothamBold; TpTitle.TextSize = 10; TpTitle.TextXAlignment = Enum.TextXAlignment.Left; TpTitle.BackgroundTransparency = 1
+
+local function CreateTpWinBtn(text, posX, color, callback)
+    local b = Instance.new("TextButton", TpHeader); b.Size = UDim2.new(0, 20, 0, 20); b.Position = UDim2.new(1, posX, 0, 4)
+    b.BackgroundColor3 = color; b.Text = text; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; b.TextSize = 10; Instance.new("UICorner", b)
+    b.MouseButton1Click:Connect(callback)
+end
+CreateTpWinBtn("X", -24, Color3.fromRGB(160, 45, 45), function() TpWindow.Visible = false end)
+CreateTpWinBtn("-", -48, Color3.fromRGB(50, 55, 70), function()
+    TpWindowState.Minimized = not TpWindowState.Minimized
+    TpWindow:TweenSize(TpWindowState.Minimized and UDim2.new(0, 320, 0, 28) or UDim2.new(0, 320, 0, 230), "Out", "Quad", 0.18, true)
+end)
+
+local container = Instance.new("Frame", TpWindow); container.Size = UDim2.new(1, -10, 1, -36); container.Position = UDim2.new(0, 5, 0, 32); container.BackgroundTransparency = 1
+local layout = Instance.new("UIListLayout", container); layout.Padding = UDim.new(0, 4); layout.HorizontalAlignment = Enum.HorizontalAlignment.Center; Instance.new("UIPadding", container).PaddingTop = UDim.new(0, 2)
+
+local coordRow = Instance.new("Frame", container); coordRow.Size = UDim2.new(1, -10, 0, 26); coordRow.BackgroundTransparency = 1
+local rowLayout = Instance.new("UIListLayout", coordRow); rowLayout.FillDirection = Enum.FillDirection.Horizontal; rowLayout.Padding = UDim.new(0, 5)
+
+local inputs = {}
+for _, axis in pairs({"X", "Y", "Z"}) do
+    local box = Instance.new("TextBox", coordRow); box.Size = UDim2.new(0, 95, 1, 0); box.BackgroundColor3 = Color3.fromRGB(12, 22, 38)
+    box.TextColor3 = Color3.new(1, 1, 1); box.Font = Enum.Font.Gotham; box.TextSize = 10; box.PlaceholderText = axis; box.PlaceholderColor3 = Color3.fromRGB(90, 90, 130); box.Text = ""
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5); inputs[axis] = box
+end
+
+local modeRow = Instance.new("Frame", container); modeRow.Size = UDim2.new(1, -10, 0, 24); modeRow.BackgroundTransparency = 1
+local modeLayout = Instance.new("UIListLayout", modeRow); modeLayout.FillDirection = Enum.FillDirection.Horizontal; modeLayout.Padding = UDim.new(0, 4)
+
+local useInstant = true
+local function MakeToggleBtn(parent, text, isSelected, onClick)
+    local b = Instance.new("TextButton", parent); b.Size = UDim2.new(0, 146, 1, 0); b.Font = Enum.Font.GothamBold; b.TextSize = 9; b.Text = text
+    b.BackgroundColor3 = isSelected and Color3.fromRGB(0, 110, 220) or Color3.fromRGB(22, 38, 65); b.TextColor3 = Color3.new(1, 1, 1); Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+    b.MouseButton1Click:Connect(onClick); return b
+end
+
+local instantBtn, glideBtn
+instantBtn = MakeToggleBtn(modeRow, "⚡ ทันที", true, function() useInstant = true; instantBtn.BackgroundColor3 = Color3.fromRGB(0, 110, 220); glideBtn.BackgroundColor3 = Color3.fromRGB(22, 38, 65) end)
+glideBtn = MakeToggleBtn(modeRow, "🕊️ ค่อยๆ ลอย", false, function() useInstant = false; glideBtn.BackgroundColor3 = Color3.fromRGB(0, 110, 220); instantBtn.BackgroundColor3 = Color3.fromRGB(22, 38, 65) end)
+
+local actionRow = Instance.new("Frame", container); actionRow.Size = UDim2.new(1, -10, 0, 26); actionRow.BackgroundTransparency = 1
+local actionLayout = Instance.new("UIListLayout", actionRow); actionLayout.FillDirection = Enum.FillDirection.Horizontal; actionLayout.Padding = UDim.new(0, 4)
+
+local function GetInputPos()
+    local x, y, z = tonumber(inputs["X"].Text), tonumber(inputs["Y"].Text), tonumber(inputs["Z"].Text)
+    return x and y and z and Vector3.new(x, y, z) or nil
+end
+
+local goBtn = Instance.new("TextButton", actionRow); goBtn.Size = UDim2.new(0, 90, 1, 0); goBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 70)
+goBtn.Text = "🚀 GO"; goBtn.TextColor3 = Color3.new(1, 1, 1); goBtn.Font = Enum.Font.GothamBold; goBtn.TextSize = 10; Instance.new("UICorner", goBtn).CornerRadius = UDim.new(0, 5)
+goBtn.MouseButton1Click:Connect(function() local pos = GetInputPos() if pos then TeleportToPosition(pos, useInstant) end end)
+
+local saveBtn = Instance.new("TextButton", actionRow); saveBtn.Size = UDim2.new(0, 202, 1, 0); saveBtn.BackgroundColor3 = Color3.fromRGB(110, 65, 5)
+saveBtn.Text = "💾 บันทึกพิกัดจุดนี้"; saveBtn.TextColor3 = Color3.new(1, 1, 1); saveBtn.Font = Enum.Font.GothamBold; saveBtn.TextSize = 9; Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 5)
+
+local savedList = Instance.new("ScrollingFrame", container); savedList.Size = UDim2.new(1, -10, 0, 96); savedList.BackgroundColor3 = Color3.fromRGB(8, 14, 26); savedList.ScrollBarThickness = 2; savedList.AutomaticCanvasSize = Enum.AutomaticSize.Y; Instance.new("UICorner", savedList)
+local listLayout = Instance.new("UIListLayout", savedList); listLayout.Padding = UDim.new(0, 3); Instance.new("UIPadding", savedList).PaddingTop = UDim.new(0, 3)
+
+local function AddSavedPoint(pos, label)
+    local row = Instance.new("Frame", savedList); row.Size = UDim2.new(1, -6, 0, 22); row.BackgroundColor3 = Color3.fromRGB(18, 32, 58); Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+    local rowHL = Instance.new("UIListLayout", row); rowHL.FillDirection = Enum.FillDirection.Horizontal; rowHL.Padding = UDim.new(0, 4); Instance.new("UIPadding", row).PaddingLeft = UDim.new(0, 4); rowHL.VerticalAlignment = Enum.VerticalAlignment.Center
+    local lbl = Instance.new("TextLabel", row); lbl.Size = UDim2.new(0, 180, 1, 0); lbl.BackgroundTransparency = 1; lbl.TextColor3 = Color3.fromRGB(190, 210, 245); lbl.Font = Enum.Font.Gotham; lbl.TextSize = 9; lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = label .. string.format(" (%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z)
+    local tpBtn = Instance.new("TextButton", row); tpBtn.Size = UDim2.new(0, 45, 0.8, 0); tpBtn.BackgroundColor3 = Color3.fromRGB(0, 110, 190); tpBtn.Text = "ไป"; tpBtn.TextColor3 = Color3.new(1, 1, 1); tpBtn.Font = Enum.Font.GothamBold; tpBtn.TextSize = 9; Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 4)
+    tpBtn.MouseButton1Click:Connect(function() TeleportToPosition(pos, useInstant) end)
+    local delBtn = Instance.new("TextButton", row); delBtn.Size = UDim2.new(0, 24, 0.8, 0); delBtn.BackgroundColor3 = Color3.fromRGB(140, 35, 35); delBtn.Text = "🗑"; delBtn.TextColor3 = Color3.new(1, 1, 1); delBtn.Font = Enum.Font.GothamBold; delBtn.TextSize = 9; Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 4)
+    delBtn.MouseButton1Click:Connect(function() row:Destroy() end)
+end
+
+local saveCount = 0
+saveBtn.MouseButton1Click:Connect(function()
+    local char = LocalPlayer.Character
+    local currentPos = (char and char:FindFirstChild("HumanoidRootPart")) and char.HumanoidRootPart.Position or nil
+    local inputX, inputY, inputZ = tonumber(inputs["X"].Text), tonumber(inputs["Y"].Text), tonumber(inputs["Z"].Text)
+    local posToSave
+    if not (inputX and inputY and inputZ) and currentPos then
+        posToSave = currentPos
+        inputs["X"].Text = string.format("%.1f", currentPos.X); inputs["Y"].Text = string.format("%.1f", currentPos.Y); inputs["Z"].Text = string.format("%.1f", currentPos.Z)
+    else posToSave = Vector3.new(inputX, inputY, inputZ) end
+    if posToSave then
+        saveCount = saveCount + 1; table.insert(TeleportSettings.SavedPoints, posToSave); AddSavedPoint(posToSave, "📍 #" .. saveCount)
+        task.delay(0.5, function() inputs["X"].Text = ""; inputs["Y"].Text = ""; inputs["Z"].Text = "" end)
+    end
+end)
+
+-- // --- [2. SPECTATOR WINDOW] --- // --
+local SpecWindow = Instance.new("Frame", ScreenGui)
+SpecWindow.Size = UDim2.new(0, 320, 0, 145); SpecWindow.AnchorPoint = Vector2.new(0.5, 0.5); SpecWindow.Position = UDim2.new(0.5, 0, 0.5, 0)
+SpecWindow.BackgroundColor3 = Color3.fromRGB(6, 12, 24); SpecWindow.Visible = false; SpecWindow.ClipsDescendants = true
+Instance.new("UICorner", SpecWindow).CornerRadius = UDim.new(0, 10)
+local SpecStroke = Instance.new("UIStroke", SpecWindow); SpecStroke.Thickness = 2; SpecStroke.Color = Color3.fromRGB(0, 150, 255); MakeDraggable(SpecWindow)
+
+local SpecHeader = Instance.new("Frame", SpecWindow); SpecHeader.Size = UDim2.new(1, 0, 0, 28); SpecHeader.BackgroundColor3 = Color3.fromRGB(12, 22, 40)
+local SpecTitle = Instance.new("TextLabel", SpecHeader); SpecTitle.Size = UDim2.new(1, -65, 1, 0); SpecTitle.Position = UDim2.new(0, 10, 0, 0)
+SpecTitle.Text = "🎥 Spectator (Auto-Lock)"; SpecTitle.TextColor3 = Color3.fromRGB(0, 200, 255); SpecTitle.Font = Enum.Font.GothamBold; SpecTitle.TextSize = 10; SpecTitle.TextXAlignment = Enum.TextXAlignment.Left; SpecTitle.BackgroundTransparency = 1
+
+CreateSpecWinBtn = function(text, posX, color, callback)
+    local b = Instance.new("TextButton", SpecHeader); b.Size = UDim2.new(0, 20, 0, 20); b.Position = UDim2.new(1, posX, 0, 4)
+    b.BackgroundColor3 = color; b.Text = text; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; b.TextSize = 10; Instance.new("UICorner", b)
+    b.MouseButton1Click:Connect(callback)
+end
+CreateSpecWinBtn("X", -24, Color3.fromRGB(160, 45, 45), function() SpecWindow.Visible = false; StopFollow() end)
+CreateSpecWinBtn("-", -48, Color3.fromRGB(50, 55, 70), function()
+    SpecWindowState.Minimized = not SpecWindowState.Minimized
+    SpecWindow:TweenSize(SpecWindowState.Minimized and UDim2.new(0, 320, 0, 28) or UDim2.new(0, 320, 0, 145), "Out", "Quad", 0.18, true)
+end)
+
+local sContainer = Instance.new("Frame", SpecWindow); sContainer.Size = UDim2.new(1, -10, 1, -36); sContainer.Position = UDim2.new(0, 5, 0, 32); sContainer.BackgroundTransparency = 1
+local sLayout = Instance.new("UIListLayout", sContainer); sLayout.Padding = UDim.new(0, 5); sLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center; Instance.new("UIPadding", sContainer).PaddingTop = UDim.new(0, 2)
+
+local playerLabel = Instance.new("TextLabel", sContainer); playerLabel.Size = UDim2.new(1, -10, 0, 28); playerLabel.BackgroundColor3 = Color3.fromRGB(12, 24, 42); playerLabel.TextColor3 = Color3.new(1, 1, 1); playerLabel.Font = Enum.Font.GothamBold; playerLabel.TextSize = 10; playerLabel.Text = "👤 -"; Instance.new("UICorner", playerLabel)
+local statusLabel = Instance.new("TextLabel", sContainer); statusLabel.Size = UDim2.new(1, -10, 0, 18); statusLabel.BackgroundTransparency = 1; statusLabel.TextColor3 = Color3.fromRGB(140, 150, 180); statusLabel.Font = Enum.Font.Gotham; statusLabel.TextSize = 9; statusLabel.Text = "⏸️ สลับรายชื่อเพื่อล็อคกล้องทันที"
+
+local navRow = Instance.new("Frame", sContainer); navRow.Size = UDim2.new(1, -10, 0, 26); navRow.BackgroundTransparency = 1
+local navLayout = Instance.new("UIListLayout", navRow); navLayout.FillDirection = Enum.FillDirection.Horizontal; navLayout.Padding = UDim.new(0, 6)
+
+local function CreateNavBtn(text, width, color, cb)
+    local b = Instance.new("TextButton", navRow); b.Size = UDim2.new(0, width, 1, 0); b.BackgroundColor3 = color; b.Text = text; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; b.TextSize = 9; Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+    b.MouseButton1Click:Connect(cb); return b
+end
+
+CreateNavBtn("◀ ย้อนกลับ", 147, Color3.fromRGB(25, 45, 85), function()
+    local list = GetOtherPlayers() if #list == 0 then statusLabel.Text = "❌ ไม่มีผู้เล่นอื่นให้ส่อง" return end
+    SpectatorSettings.CurrentIndex = SpectatorSettings.CurrentIndex - 1
+    if SpectatorSettings.CurrentIndex < 1 then SpectatorSettings.CurrentIndex = #list end
+    UpdateSpecLabel(playerLabel)
+    FollowPlayer(list[SpectatorSettings.CurrentIndex], statusLabel)
+end)
+
+CreateNavBtn("ถัดไป ▶", 147, Color3.fromRGB(25, 45, 85), function()
+    local list = GetOtherPlayers() if #list == 0 then statusLabel.Text = "❌ ไม่มีผู้เล่นอื่นให้ส่อง" return end
+    SpectatorSettings.CurrentIndex = SpectatorSettings.CurrentIndex + 1
+    if SpectatorSettings.CurrentIndex > #list then SpectatorSettings.CurrentIndex = 1 end
+    UpdateSpecLabel(playerLabel)
+    FollowPlayer(list[SpectatorSettings.CurrentIndex], statusLabel)
+end)
+
+local funcRow = Instance.new("Frame", sContainer); funcRow.Size = UDim2.new(1, -10, 0, 28); funcRow.BackgroundTransparency = 1
+local funcLayout = Instance.new("UIListLayout", funcRow); funcLayout.FillDirection = Enum.FillDirection.Horizontal; funcLayout.Padding = UDim.new(0, 6)
+
+local function CreateFuncBtn(text, width, color, cb)
+    local b = Instance.new("TextButton", funcRow); b.Size = UDim2.new(0, width, 1, 0); b.BackgroundColor3 = color; b.Text = text; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; b.TextSize = 9; Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+    b.MouseButton1Click:Connect(cb); return b
+end
+CreateFuncBtn("🚀 วาปหาผู้เล่นคนนี้", 147, Color3.fromRGB(110, 65, 0), function() local list = GetOtherPlayers() if #list == 0 then return end TeleportToPlayer(list[SpectatorSettings.CurrentIndex], statusLabel) end)
+CreateFuncBtn("⏹ หยุดล็อกกล้อง", 147, Color3.fromRGB(130, 30, 30), function() StopFollow() statusLabel.Text = "⏹ คืนค่ากล้องสู่ปกติแล้ว" end)
+
+UpdateSpecLabel(playerLabel)
+
+-- // --- [3. 🆕 INTEGRATED: FREECAM MINI WINDOW + SNAP] --- // --
+local FreecamWindow = Instance.new("Frame", ScreenGui)
+FreecamWindow.Size = UDim2.new(0, 320, 0, 165); FreecamWindow.AnchorPoint = Vector2.new(0.5, 0.5); FreecamWindow.Position = UDim2.new(0.5, 0, 0.5, 0)
+FreecamWindow.BackgroundColor3 = Color3.fromRGB(6, 12, 24); FreecamWindow.Visible = false; FreecamWindow.ClipsDescendants = true
+Instance.new("UICorner", FreecamWindow).CornerRadius = UDim.new(0, 10)
+local FreecamStroke = Instance.new("UIStroke", FreecamWindow); FreecamStroke.Thickness = 2; FreecamStroke.Color = Color3.fromRGB(0, 140, 255); MakeDraggable(FreecamWindow)
+
+local FcHeader = Instance.new("Frame", FreecamWindow); FcHeader.Size = UDim2.new(1, 0, 0, 28); FcHeader.BackgroundColor3 = Color3.fromRGB(12, 22, 40)
+local FcTitle = Instance.new("TextLabel", FcHeader); FcTitle.Size = UDim2.new(1, -65, 1, 0); FcTitle.Position = UDim2.new(0, 10, 0, 0)
+FcTitle.Text = "👁️ Freecam System Engine"; FcTitle.TextColor3 = Color3.fromRGB(0, 200, 255); FcTitle.Font = Enum.Font.GothamBold; FcTitle.TextSize = 10; FcTitle.TextXAlignment = Enum.TextXAlignment.Left; FcTitle.BackgroundTransparency = 1
+
+local MobileFrame = Instance.new("Frame", ScreenGui); MobileFrame.Size = UDim2.new(0, 225, 0, 225); MobileFrame.Position = UDim2.new(0, 10, 1, -235); MobileFrame.BackgroundTransparency = 1; MobileFrame.Visible = false
+local upDownFrame = Instance.new("Frame", ScreenGui); upDownFrame.Size = UDim2.new(0, 70, 0, 160); upDownFrame.Position = UDim2.new(1, -85, 1, -175); upDownFrame.BackgroundTransparency = 1; upDownFrame.Visible = false
+local snapBtn = Instance.new("TextButton", ScreenGui); snapBtn.Size = UDim2.new(0, 140, 0, 50); snapBtn.Position = UDim2.new(0.5, -70, 1, -65); snapBtn.BackgroundColor3 = Color3.fromRGB(80, 0, 120); snapBtn.BackgroundTransparency = 0.2; snapBtn.Text = "🔮 วาปมาตรงนี้"; snapBtn.TextColor3 = Color3.new(1,1,1); snapBtn.Font = Enum.Font.GothamBold; snapBtn.TextSize = 12; Instance.new("UICorner", snapBtn).CornerRadius = UDim.new(0, 10); local snapStroke = Instance.new("UIStroke", snapBtn); snapStroke.Color = Color3.fromRGB(180, 0, 255); snapStroke.Thickness = 2; snapBtn.Visible = false
+
+local function CleanUpFreecam()
+    DisableFreecam()
+    MobileFrame.Visible = false
+    upDownFrame.Visible = false
+    snapBtn.Visible = false
+end
+
+local function CreateFcWinBtn(text, posX, color, callback)
+    local b = Instance.new("TextButton", FcHeader); b.Size = UDim2.new(0, 20, 0, 20); b.Position = UDim2.new(1, posX, 0, 4)
+    b.BackgroundColor3 = color; b.Text = text; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; b.TextSize = 10; Instance.new("UICorner", b)
+    b.MouseButton1Click:Connect(callback)
+end
+CreateFcWinBtn("X", -24, Color3.fromRGB(160, 45, 45), function() FreecamWindow.Visible = false; CleanUpFreecam() end)
+CreateFcWinBtn("-", -48, Color3.fromRGB(50, 55, 70), function()
+    FreecamWindowState.Minimized = not FreecamWindowState.Minimized
+    FreecamWindow:TweenSize(FreecamWindowState.Minimized and UDim2.new(0, 320, 0, 28) or UDim2.new(0, 320, 0, 165), "Out", "Quad", 0.18, true)
+end)
+
+local fcContainer = Instance.new("Frame", FreecamWindow); fcContainer.Size = UDim2.new(1, -10, 1, -36); fcContainer.Position = UDim2.new(0, 5, 0, 32); fcContainer.BackgroundTransparency = 1
+local fcLayout = Instance.new("UIListLayout", fcContainer); fcLayout.Padding = UDim.new(0, 4); fcLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center; Instance.new("UIPadding", fcContainer).PaddingTop = UDim.new(0, 2)
+
+local fcStatusLabel = Instance.new("TextLabel", fcContainer); fcStatusLabel.Size = UDim2.new(1, -20, 0, 18); fcStatusLabel.BackgroundTransparency = 1; fcStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 200); fcStatusLabel.Font = Enum.Font.Gotham; fcStatusLabel.TextSize = 10; fcStatusLabel.Text = "⏸️ ปิดอยู่"
+local fcSpeedLabel = Instance.new("TextLabel", fcContainer); fcSpeedLabel.Size = UDim2.new(1, -20, 0, 18); fcSpeedLabel.BackgroundTransparency = 1; fcSpeedLabel.TextColor3 = Color3.fromRGB(180, 180, 255); fcSpeedLabel.Font = Enum.Font.Gotham; fcSpeedLabel.TextSize = 11; fcSpeedLabel.Text = "⚡ Speed: " .. FreecamSettings.Speed
+
+local fcSpeedRow = Instance.new("Frame", fcContainer); fcSpeedRow.Size = UDim2.new(1, -20, 0, 26); fcSpeedRow.BackgroundTransparency = 1
+local fcSLayout = Instance.new("UIListLayout", fcSpeedRow); fcSLayout.FillDirection = Enum.FillDirection.Horizontal; fcSLayout.Padding = UDim.new(0, 6); fcSLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+local function AddFcSpeedBtn(t, amt)
+    local b = Instance.new("TextButton", fcSpeedRow); b.Size = UDim2.new(0, 140, 1, 0); b.BackgroundColor3 = Color3.fromRGB(20, 50, 90); b.Text = t; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; b.TextSize = 11; Instance.new("UICorner", b)
+    b.MouseButton1Click:Connect(function()
+        FreecamSettings.Speed = math.clamp(FreecamSettings.Speed + amt, 0.5, 100)
+        fcSpeedLabel.Text = "⚡ Speed: " .. FreecamSettings.Speed
+    end)
+end
+AddFcSpeedBtn("▼ ช้าลง (-0.5)", -0.5); AddFcSpeedBtn("▲ เร็วขึ้น (+0.5)", 0.5)
+
+local fcToggleBtn = Instance.new("TextButton", fcContainer); fcToggleBtn.Size = UDim2.new(1, -20, 0, 30); fcToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 50); fcToggleBtn.Text = "👁️ เปิด Freecam"; fcToggleBtn.TextColor3 = Color3.new(1,1,1); fcToggleBtn.Font = Enum.Font.GothamBold; fcToggleBtn.TextSize = 12; Instance.new("UICorner", fcToggleBtn)
+
+local function MakeMobileBtn(parent, text, x, y, w, h, key)
+    local b = Instance.new("TextButton", parent); b.Size = UDim2.new(0, w, 0, h); b.Position = UDim2.new(0, x, 0, y); b.BackgroundColor3 = Color3.fromRGB(20, 50, 90); b.BackgroundTransparency = 0.3; b.Text = text; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; b.TextSize = 18; Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    b.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then FreecamSettings[key] = true end end)
+    b.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then FreecamSettings[key] = false end end)
+end
+
+MakeMobileBtn(MobileFrame, "▲",  75, 0,   75, 75, "_forward")
+MakeMobileBtn(MobileFrame, "▼",  75, 150, 75, 75, "_back")
+MakeMobileBtn(MobileFrame, "◀",  0,  75,  75, 75, "_left")
+MakeMobileBtn(MobileFrame, "▶", 150, 75,  75, 75, "_right")
+MakeMobileBtn(upDownFrame, "⬆️",  0, 0,  70, 70, "_up")
+MakeMobileBtn(upDownFrame, "⬇️",  0, 90, 70, 70, "_down")
+
+snapBtn.MouseButton1Click:Connect(function()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    hrp.CFrame = CFrame.new(Camera.CFrame.Position)
+    fcStatusLabel.Text = "✅ วาปตัวละครมาแล้ว!"
+end)
+
+fcToggleBtn.MouseButton1Click:Connect(function()
+    FreecamSettings.Enabled = not FreecamSettings.Enabled
+    if FreecamSettings.Enabled then
+        EnableFreecam()
+        fcToggleBtn.Text = "⏹ ปิด Freecam"
+        fcToggleBtn.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+        fcStatusLabel.Text = "✅ เปิดอยู่"
+        MobileFrame.Visible = true; upDownFrame.Visible = true; snapBtn.Visible = true
+    else
+        CleanUpFreecam()
+        fcToggleBtn.Text = "👁️ เปิด Freecam"
+        fcToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 50)
+        fcStatusLabel.Text = "⏸️ ปิดอยู่"
+    end
+end)
+
+-- // --- TRIGGER BUTTONS ON MAIN PANELS --- // --
+local function AddWindowTriggerButton(pageName, text, icon, targetWin, stateObj, defaultHeight)
+    local b = Instance.new("TextButton", Pages[pageName])
+    b.BackgroundColor3 = Color3.fromRGB(10, 25, 45); b.Text = "  " .. icon .. "  " .. text
+    b.TextColor3 = Color3.fromRGB(0, 180, 255); b.Font = Enum.Font.GothamBold; b.TextSize = 11; b.TextXAlignment = Enum.TextXAlignment.Left
+    Instance.new("UICorner", b); local s = Instance.new("UIStroke", b); s.Color = Color3.fromRGB(0, 100, 200)
+
+    b.MouseButton1Click:Connect(function()
+        if not targetWin.Visible then
+            targetWin.Position = UDim2.new(0.5, 0, 0.5, 0)
+            stateObj.Minimized = false
+            targetWin.Size = UDim2.new(0, 320, 0, defaultHeight)
+            if targetWin == SpecWindow then
+                UpdateSpecLabel(playerLabel)
+                local list = GetOtherPlayers()
+                if #list > 0 then FollowPlayer(list[SpectatorSettings.CurrentIndex], statusLabel) end
+            end
+        else
+            if targetWin == SpecWindow then StopFollow() elseif targetWin == FreecamWindow then CleanUpFreecam() end
+        end
+        targetWin.Visible = not targetWin.Visible
+    end)
+end
+
+-- ลิสต์รายชื่อแท็บหลักทั้งหมด
+local tabs = {"Combat", "Visuals", "Movement", "Player", "Misc"}
+for _, name in pairs(tabs) do CreatePage(name) end
+
+-- COMBAT TAB
+AddBtn("Combat", "Aimbot", "🎯", function() AimbotSettings.Enabled = not AimbotSettings.Enabled end)
+AddBtn("Combat", "Silent Aim", "🤫", function() print("Silent Aim") end)
+AddBtn("Combat", "No Recoil", "🚫", function() print("No Recoil") end)
+
+-- VISUALS TAB
+AddBtn("Visuals", "ESP Box", "📦", function() EspSettings.Boxes = not EspSettings.Boxes end)
+AddBtn("Visuals", "ESP Skeleton", "💀", function() EspSettings.Skeleton = not EspSettings.Skeleton end)
+
+-- MOVEMENT TAB
+AddSpeedControl("Movement")
+AddBtn("Movement", "Inf Jump", "🦘", function() MovementSettings.InfJump = not MovementSettings.InfJump end)
+AddBtn("Movement", "Invisibility", "👻", function() MovementSettings.Invisibility = not MovementSettings.Invisibility end)
+AddWindowTriggerButton("Movement", "Teleport", "🌀", TpWindow, TpWindowState, 230)
+
+-- PLAYER TAB (รวมศูนย์ระบบกล้องและการควบคุมผู้เล่นไว้ที่นี่)
+AddWindowTriggerButton("Player", "Spectator Panel", "🎥", SpecWindow, SpecWindowState, 145)
+AddWindowTriggerButton("Player", "Freecam Panel", "👁️", FreecamWindow, FreecamWindowState, 165)
+
+local function SwitchTab(name)
+    for k, v in pairs(Pages) do v.Visible = (k == name) end
+end
+
+for _, name in pairs(tabs) do
+    local b = Instance.new("TextButton", Sidebar); b.Size = UDim2.new(0.9, 0, 0, 35); b.BackgroundColor3 = Color3.fromRGB(15, 35, 60)
+    b.Text = name; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.GothamBold; Instance.new("UICorner", b)
+    b.MouseButton1Click:Connect(function() SwitchTab(name) end)
+end
+SwitchTab("Combat")
+
+local Tgl = Instance.new("TextButton", ScreenGui); Tgl.Size = UDim2.new(0, 50, 0, 50); Tgl.Position = UDim2.new(0, 10, 0.5, 0); Tgl.Text = "OMEGA"
+Tgl.BackgroundColor3 = Color3.fromRGB(5, 5, 10); Tgl.TextColor3 = Color3.new(1,1,1); Instance.new("UICorner", Tgl).CornerRadius = UDim.new(1,0); MakeDraggable(Tgl)
+Tgl.Activated:Connect(function() MainFrame.Visible = not MainFrame.Visible end)
+
+-- // --- MAIN LOOP --- // --
+RunService.RenderStepped:Connect(function()
+    MainStroke.Color = Color3.fromHSV(tick() % 5 / 5, 0.8, 1)
+    TpStroke.Color = Color3.fromHSV(tick() % 5 / 5, 0.8, 1)
+    SpecStroke.Color = Color3.fromHSV(tick() % 5 / 5, 0.8, 1)
+    FreecamStroke.Color = Color3.fromHSV(tick() % 5 / 5, 0.8, 1)
+    
+    if AimbotSettings.Enabled then
+        local targetPart = GetClosestTarget()
+        if targetPart then
+            local lookAtPos = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
+            Camera.CFrame = Camera.CFrame:Lerp(lookAtPos, AimbotSettings.Smoothness)
+        end
+    end
+end)
+
